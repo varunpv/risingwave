@@ -43,7 +43,7 @@ use self::avro::AvroAccessBuilder;
 use self::bytes_parser::BytesAccessBuilder;
 pub use self::mysql::mysql_row_to_owned_row;
 use self::plain_parser::PlainParser;
-pub use self::postgres::{postgres_row_to_owned_row, EnumString};
+pub use self::postgres::postgres_row_to_owned_row;
 use self::simd_json_parser::DebeziumJsonAccessBuilder;
 pub use self::unified::json::TimestamptzHandling;
 use self::unified::AccessImpl;
@@ -75,7 +75,9 @@ mod maxwell;
 mod mysql;
 pub mod plain_parser;
 mod postgres;
+
 mod protobuf;
+pub mod scalar_adapter;
 mod unified;
 mod upsert_parser;
 mod util;
@@ -542,8 +544,10 @@ pub enum ParserFormat {
     Plain,
 }
 
-/// `ByteStreamSourceParser` is a new message parser, the parser should consume
-/// the input data stream and return a stream of parsed msgs.
+/// `ByteStreamSourceParser` is the entrypoint abstraction for parsing messages.
+/// It consumes bytes of one individual message and produces parsed records.
+///
+/// It's used by [`ByteStreamSourceParserImpl::into_stream`]. `pub` is for benchmark only.
 pub trait ByteStreamSourceParser: Send + Debug + Sized + 'static {
     /// The column descriptors of the output chunk.
     fn columns(&self) -> &[SourceColumnDesc];
@@ -625,7 +629,7 @@ impl<P: ByteStreamSourceParser> P {
 
         // The parser stream will be long-lived. We use `instrument_with` here to create
         // a new span for the polling of each chunk.
-        into_chunk_stream(self, data_stream)
+        into_chunk_stream_inner(self, data_stream)
             .instrument_with(move || tracing::info_span!("source_parse_chunk", actor_id, source_id))
     }
 }
@@ -637,7 +641,10 @@ const MAX_ROWS_FOR_TRANSACTION: usize = 4096;
 // TODO: when upsert is disabled, how to filter those empty payload
 // Currently, an err is returned for non upsert with empty payload
 #[try_stream(ok = StreamChunk, error = crate::error::ConnectorError)]
-async fn into_chunk_stream<P: ByteStreamSourceParser>(mut parser: P, data_stream: BoxSourceStream) {
+async fn into_chunk_stream_inner<P: ByteStreamSourceParser>(
+    mut parser: P,
+    data_stream: BoxSourceStream,
+) {
     let columns = parser.columns().to_vec();
 
     let mut heartbeat_builder = SourceStreamChunkBuilder::with_capacity(columns.clone(), 0);
@@ -853,8 +860,10 @@ impl AccessBuilderImpl {
     }
 }
 
+/// The entrypoint of parsing. It parses [`SourceMessage`] stream (byte stream) into [`StreamChunk`] stream.
+/// Used by [`crate::source::into_chunk_stream`].
 #[derive(Debug)]
-pub enum ByteStreamSourceParserImpl {
+pub(crate) enum ByteStreamSourceParserImpl {
     Csv(CsvParser),
     Json(JsonParser),
     Debezium(DebeziumParser),
@@ -865,11 +874,9 @@ pub enum ByteStreamSourceParserImpl {
     CanalJson(CanalJsonParser),
 }
 
-pub type ParsedStreamImpl = impl ChunkSourceStream + Unpin;
-
 impl ByteStreamSourceParserImpl {
-    /// Converts this `SourceMessage` stream into a stream of [`StreamChunk`].
-    pub fn into_stream(self, msg_stream: BoxSourceStream) -> ParsedStreamImpl {
+    /// Converts [`SourceMessage`] stream into [`StreamChunk`] stream.
+    pub fn into_stream(self, msg_stream: BoxSourceStream) -> impl ChunkSourceStream + Unpin {
         #[auto_enum(futures03::Stream)]
         let stream = match self {
             Self::Csv(parser) => parser.into_stream(msg_stream),

@@ -72,6 +72,7 @@ RiseDev is the development mode of RisingWave. To develop RisingWave, you need t
 * Rust toolchain
 * CMake
 * protobuf (>= 3.12.0)
+* OpenSSL (>= 3)
 * PostgreSQL (psql) (>= 14.1)
 * Tmux (>= v3.2a)
 * LLVM 16 (For macOS only, to workaround some bugs in macOS toolchain. See https://github.com/risingwavelabs/risingwave/issues/6205)
@@ -80,7 +81,7 @@ RiseDev is the development mode of RisingWave. To develop RisingWave, you need t
 To install the dependencies on macOS, run:
 
 ```shell
-brew install postgresql cmake protobuf tmux cyrus-sasl llvm
+brew install postgresql cmake protobuf tmux cyrus-sasl llvm openssl@3
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
@@ -185,15 +186,9 @@ For example, you can modify the default section to:
     - use: frontend
     - use: prometheus
     - use: grafana
-    - use: zookeeper
-      persist-data: true
     - use: kafka
       persist-data: true
 ```
-
-> [!NOTE]
->
-> The Kafka service depends on the ZooKeeper service. If you want to enable the Kafka component, enable the ZooKeeper component first.
 
 Now you can run `./risedev d` to start a new dev cluster. The new dev cluster will contain components as configured in the yaml file. RiseDev will automatically configure the components to use the available storage service and to monitor the target.
 
